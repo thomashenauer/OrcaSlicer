@@ -19,6 +19,119 @@ class WXDLLIMPEXP_MEDIA
 public:
     GstElement *m_playbin; // GStreamer media element
 };
+
+static bool has_gobject_property(GObject *obj, const char *property_name)
+{
+    if (!obj || !property_name)
+        return false;
+    return g_object_class_find_property(G_OBJECT_GET_CLASS(obj), property_name) != nullptr;
+}
+
+static void set_bool_property_if_present(GObject *obj, const char *property_name, gboolean value)
+{
+    if (has_gobject_property(obj, property_name))
+        g_object_set(obj, property_name, value, NULL);
+}
+
+static void set_int64_property_if_present(GObject *obj, const char *property_name, gint64 value)
+{
+    if (has_gobject_property(obj, property_name))
+        g_object_set(obj, property_name, value, NULL);
+}
+
+static void tune_live_preview_sink(GstElement *element)
+{
+    if (!element)
+        return;
+
+    GObject *obj = G_OBJECT(element);
+    // Live preview should not accumulate lateness or drop frames for A/V sync.
+    set_bool_property_if_present(obj, "sync", FALSE);
+    set_bool_property_if_present(obj, "qos", FALSE);
+    set_int64_property_if_present(obj, "max-lateness", -1);
+}
+
+static bool has_avdec_h264_decoder()
+{
+    GstElementFactory *factory = gst_element_factory_find("avdec_h264");
+    if (!factory)
+        return false;
+    gst_object_unref(factory);
+    return true;
+}
+
+static bool is_bambu_uri_for_playbin(GstElement *playbin)
+{
+    if (!playbin)
+        return false;
+    static GQuark is_bambu_quark = 0;
+    if (is_bambu_quark == 0)
+        is_bambu_quark = g_quark_from_static_string("orca-is-bambu-uri");
+    if (g_object_get_qdata(G_OBJECT(playbin), is_bambu_quark) != nullptr)
+        return true;
+
+    gchar *uri = nullptr;
+    g_object_get(G_OBJECT(playbin), "uri", &uri, NULL);
+    const bool is_bambu = (uri != nullptr) && g_str_has_prefix(uri, "bambu://");
+    g_free(uri);
+    return is_bambu;
+}
+
+static gint on_uridecodebin_autoplug_select(GstElement * /*decodebin*/, GstPad * /*pad*/, GstCaps * /*caps*/, GstElementFactory *factory, gpointer user_data)
+{
+    auto *playbin = GST_ELEMENT(user_data);
+    if (!factory)
+        return 0; // GST_AUTOPLUG_SELECT_TRY
+
+    const gchar *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
+    const bool is_bambu = is_bambu_uri_for_playbin(playbin);
+    if (!is_bambu)
+        return 0; // GST_AUTOPLUG_SELECT_TRY
+    if (!factory_name)
+        return 0;
+
+    // Only skip NVIDIA HW decode if a robust software fallback (libav) exists in this runtime.
+    const bool can_fallback_to_sw = has_avdec_h264_decoder();
+
+    // For Bambu live preview, skip NVIDIA HW decoders to avoid CUDAMemory-only output negotiation.
+    if (g_strcmp0(factory_name, "nvh264dec") == 0 || g_strcmp0(factory_name, "nvh265dec") == 0) {
+        if (!can_fallback_to_sw)
+            return 0; // Keep stream working rather than black video.
+        return 2; // GST_AUTOPLUG_SELECT_SKIP
+    }
+
+    return 0;
+}
+
+static void maybe_attach_bambu_decoder_filter(GstElement *playbin, GstElement *element)
+{
+    if (!playbin || !element)
+        return;
+
+    auto *factory = gst_element_get_factory(element);
+    if (!factory)
+        return;
+    const gchar *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
+    const bool is_uri_decodebin = g_str_has_prefix(factory_name, "uridecodebin");
+    const bool is_decodebin = g_str_has_prefix(factory_name, "decodebin");
+    if (!is_uri_decodebin && !is_decodebin)
+        return;
+
+    static GQuark attached_quark = 0;
+    if (attached_quark == 0)
+        attached_quark = g_quark_from_static_string("orca-bambu-autoplug-filter-attached");
+    if (g_object_get_qdata(G_OBJECT(element), attached_quark) != nullptr)
+        return;
+
+    g_signal_connect(element, "autoplug-select", G_CALLBACK(on_uridecodebin_autoplug_select), playbin);
+    g_object_set_qdata(G_OBJECT(element), attached_quark, GINT_TO_POINTER(1));
+}
+
+static void on_playbin_deep_element_added(GstBin *playbin, GstBin * /*sub_bin*/, GstElement *element, gpointer /*user_data*/)
+{
+    tune_live_preview_sink(element);
+    maybe_attach_bambu_decoder_filter(GST_ELEMENT(playbin), element);
+}
 #endif
 
 wxDEFINE_EVENT(EVT_MEDIA_CTRL_STAT, wxCommandEvent);
@@ -46,6 +159,13 @@ wxMediaCtrl2::wxMediaCtrl2(wxWindow *parent)
     g_object_set (G_OBJECT (playbin),
                   "audio-sink", NULL,
                    NULL);
+    g_signal_connect(playbin, "deep-element-added", G_CALLBACK(on_playbin_deep_element_added), nullptr);
+    GstElement *video_sink = nullptr;
+    g_object_get(G_OBJECT(playbin), "video-sink", &video_sink, NULL);
+    if (video_sink) {
+        tune_live_preview_sink(video_sink);
+        gst_object_unref(video_sink);
+    }
     gstbambusrc_register();
     Bind(wxEVT_MEDIA_LOADED, [this](auto & e) {
         m_loaded = true;
@@ -161,6 +281,17 @@ void wxMediaCtrl2::Load(wxURI url)
         boost::lexical_cast<std::string>(GetCurrentThreadId())));
 #endif
 #ifdef __WXGTK3__
+    if (m_imp != nullptr) {
+        auto playbin = reinterpret_cast<wxGStreamerMediaBackend *>(m_imp)->m_playbin;
+        if (playbin) {
+            static GQuark is_bambu_quark = 0;
+            if (is_bambu_quark == 0)
+                is_bambu_quark = g_quark_from_static_string("orca-is-bambu-uri");
+            const bool is_bambu = (url.GetScheme() == "bambu");
+            g_object_set_qdata(G_OBJECT(playbin), is_bambu_quark, is_bambu ? GINT_TO_POINTER(1) : nullptr);
+        }
+    }
+
     GstElementFactory *factory;
     int hasplugins = 1;
     

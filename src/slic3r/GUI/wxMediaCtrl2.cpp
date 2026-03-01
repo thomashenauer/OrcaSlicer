@@ -13,6 +13,7 @@
 #ifdef __LINUX__
 #include "Printer/gstbambusrc.h"
 #include <gst/gst.h> // main gstreamer header
+#include <gst/base/gstbasesink.h>
 class WXDLLIMPEXP_MEDIA
     wxGStreamerMediaBackend : public wxMediaBackendCommonBase
 {
@@ -53,11 +54,14 @@ static void tune_live_preview_sink(GstElement *element)
 
 static bool has_avdec_h264_decoder()
 {
-    GstElementFactory *factory = gst_element_factory_find("avdec_h264");
-    if (!factory)
-        return false;
-    gst_object_unref(factory);
-    return true;
+    static const bool has_decoder = []() {
+        GstElementFactory *factory = gst_element_factory_find("avdec_h264");
+        if (!factory)
+            return false;
+        gst_object_unref(factory);
+        return true;
+    }();
+    return has_decoder;
 }
 
 static bool is_bambu_uri_for_playbin(GstElement *playbin)
@@ -112,6 +116,8 @@ static void maybe_attach_bambu_decoder_filter(GstElement *playbin, GstElement *e
     if (!factory)
         return;
     const gchar *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
+    if (!factory_name)
+        return;
     const bool is_uri_decodebin = g_str_has_prefix(factory_name, "uridecodebin");
     const bool is_decodebin = g_str_has_prefix(factory_name, "decodebin");
     if (!is_uri_decodebin && !is_decodebin)
@@ -129,8 +135,13 @@ static void maybe_attach_bambu_decoder_filter(GstElement *playbin, GstElement *e
 
 static void on_playbin_deep_element_added(GstBin *playbin, GstBin * /*sub_bin*/, GstElement *element, gpointer /*user_data*/)
 {
-    tune_live_preview_sink(element);
-    maybe_attach_bambu_decoder_filter(GST_ELEMENT(playbin), element);
+    auto *playbin_element = GST_ELEMENT(playbin);
+    if (!is_bambu_uri_for_playbin(playbin_element))
+        return;
+
+    if (GST_IS_BASE_SINK(element))
+        tune_live_preview_sink(element);
+    maybe_attach_bambu_decoder_filter(playbin_element, element);
 }
 #endif
 
@@ -160,12 +171,6 @@ wxMediaCtrl2::wxMediaCtrl2(wxWindow *parent)
                   "audio-sink", NULL,
                    NULL);
     g_signal_connect(playbin, "deep-element-added", G_CALLBACK(on_playbin_deep_element_added), nullptr);
-    GstElement *video_sink = nullptr;
-    g_object_get(G_OBJECT(playbin), "video-sink", &video_sink, NULL);
-    if (video_sink) {
-        tune_live_preview_sink(video_sink);
-        gst_object_unref(video_sink);
-    }
     gstbambusrc_register();
     Bind(wxEVT_MEDIA_LOADED, [this](auto & e) {
         m_loaded = true;

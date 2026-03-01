@@ -264,6 +264,7 @@ void MediaPlayCtrl::Play()
         return;
     }
     m_failed_code = 0;
+    m_stop_requested = false;
     if (m_machine.empty()) {
         Stop(_L("Please confirm if the printer is connected."));
         return;
@@ -391,7 +392,9 @@ void MediaPlayCtrl::Stop(wxString const &msg, wxString const &msg2)
         m_media_ctrl->InvalidateBestSize();
         m_button_play->SetIcon("media_play");
         boost::unique_lock lock(m_mutex);
-        m_tasks.push_back("<stop>");
+        m_stop_requested = true;
+        if (m_tasks.empty() || m_tasks.back() != "<stop>")
+            m_tasks.push_back("<stop>");
         m_cond.notify_all();
         if (!msg.IsEmpty())
             SetStatus(msg);
@@ -616,9 +619,11 @@ void MediaPlayCtrl::onStateChanged(wxMediaEvent &event)
         wxSize size = m_media_ctrl->GetVideoSize();
         BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl::onStateChanged: size: " << size.x << "x" << size.y;
         m_failed_code = m_media_ctrl->GetLastError();
+        const bool stop_requested = m_stop_requested.load(std::memory_order_relaxed);
         if (size.GetWidth() >= 320) {
             m_last_state = state;
             m_failed_code = 0;
+            m_stop_requested = false;
             SetStatus(_L("Playing..."), false);
 
 
@@ -627,7 +632,7 @@ void MediaPlayCtrl::onStateChanged(wxMediaEvent &event)
             boost::unique_lock lock(m_mutex);
             m_tasks.push_back("<play>");
             m_cond.notify_all();
-        } else if (event.GetId()) {
+        } else if (stop_requested || event.GetId()) {
             if (m_failed_code == 0)
                 m_failed_code = 2;
             Stop();
@@ -708,7 +713,9 @@ void MediaPlayCtrl::media_proc()
             continue;
         }
         lock.unlock();
+        bool is_stop_task = false;
         if (url == "<stop>") {
+            is_stop_task = true;
             BOOST_LOG_TRIVIAL(info) <<  "MediaPlayCtrl: start stop";
             m_media_ctrl->Stop();
             BOOST_LOG_TRIVIAL(info) << "MediaPlayCtrl: end stop";
@@ -727,7 +734,9 @@ void MediaPlayCtrl::media_proc()
         lock.lock();
         m_tasks.pop_front();
         wxMediaEvent theEvent(wxEVT_MEDIA_STATECHANGED, m_media_ctrl->GetId());
-        theEvent.SetId(0);
+        // For explicit stop tasks, post a normal-id event so loading->stopped transitions
+        // are handled as failures/teardown instead of being ignored as synthetic updates.
+        theEvent.SetId(is_stop_task ? m_media_ctrl->GetId() : 0);
         m_media_ctrl->GetEventHandler()->AddPendingEvent(theEvent);
     }
 }
@@ -853,4 +862,3 @@ void wxMediaCtrl2::DoSetSize(int x, int y, int width, int height, int sizeFlags)
         });
     }
 }
-

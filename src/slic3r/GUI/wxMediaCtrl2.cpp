@@ -218,8 +218,10 @@ void wxMediaCtrl2::Stop()
     if (m_imp != nullptr) {
         auto playbin = reinterpret_cast<wxGStreamerMediaBackend *>(m_imp)->m_playbin;
         if (playbin) {
-            gst_element_set_state(playbin, GST_STATE_NULL);
+            gst_element_set_state(playbin, GST_STATE_READY);
             gst_element_get_state(playbin, nullptr, nullptr, 200 * GST_MSECOND);
+            gst_element_set_state(playbin, GST_STATE_NULL);
+            gst_element_get_state(playbin, nullptr, nullptr, 1000 * GST_MSECOND);
             g_object_set(G_OBJECT(playbin), "uri", NULL, NULL);
         }
     }

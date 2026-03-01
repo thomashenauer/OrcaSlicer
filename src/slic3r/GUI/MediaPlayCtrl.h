@@ -15,6 +15,7 @@
 #include <boost/thread.hpp>
 #include <boost/thread/condition_variable.hpp>
 
+#include <atomic>
 #include <deque>
 #include <set>
 
@@ -100,6 +101,7 @@ private:
     bool m_user_triggered = false;
     int m_failed_retry = 0;
     int m_failed_code = 0;
+    std::atomic_bool m_stop_requested {false};
     std::vector<double> m_stat;
     std::set<int> m_last_failed_codes;
     wxDateTime    m_last_user_play;

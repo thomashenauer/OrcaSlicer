@@ -22,6 +22,7 @@
 #include <iterator>
 #include <exception>
 #include <cstdlib>
+#include <future>
 #include <regex>
 #include <thread>
 #include <string_view>
@@ -319,6 +320,7 @@ public:
         // draw logo and constant info text
         Decorate(m_main_bitmap);
         wxGetApp().UpdateFrameDarkUI(this);
+        set_bitmap(m_main_bitmap);
     }
 
     void SetText(const wxString& text)
@@ -339,11 +341,17 @@ public:
 
             memDC.SelectObject(wxNullBitmap);
             set_bitmap(bitmap);
-#ifdef __WXOSX__
-            // without this code splash screen wouldn't be updated under OSX
-            wxYield();
-#endif
+            ProcessPendingEvents();
         }
+    }
+
+    void ProcessPendingEvents()
+    {
+#if defined(__WXOSX__) || defined(__WXGTK__)
+        // Without this the splash bitmap may not repaint while startup is still
+        // running synchronously on the main thread.
+        wxYield();
+#endif
     }
 
     void Decorate(wxBitmap& bmp)
@@ -2907,16 +2915,19 @@ bool GUI_App::on_init_inner()
 
         BOOST_LOG_TRIVIAL(info) << "begin to show the splash screen...";
         //BBS use BBL splashScreen
-        scrn = new SplashScreen(bmp, wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, splashscreen_pos);
-        wxYield();
+        scrn = new SplashScreen(bmp, wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_NO_TIMEOUT, 0, splashscreen_pos);
         scrn->SetText(_L("Loading configuration")+ dots);
     }
 
     BOOST_LOG_TRIVIAL(info) << "loading systen presets...";
+    if (scrn)
+        scrn->ProcessPendingEvents();
     preset_bundle = new PresetBundle();
 
     // just checking for existence of Slic3r::data_dir is not enough : it may be an empty directory
     // supplied as argument to --datadir; in that case we should still run the wizard
+    if (scrn)
+        scrn->ProcessPendingEvents();
     preset_bundle->setup_directories();
 
 
@@ -3072,7 +3083,10 @@ bool GUI_App::on_init_inner()
         }
     } */
     copy_network_if_available();
-    on_init_network();
+    on_init_network(false, [scrn]() {
+        if (scrn)
+            scrn->ProcessPendingEvents();
+    });
 
     if (m_agent && m_agent->is_user_login()) {
         enable_user_preset_folder(true);
@@ -3086,6 +3100,8 @@ bool GUI_App::on_init_inner()
             // Enable all substitutions (in both user and system profiles), but log the substitutions in user profiles only.
             // If there are substitutions in system profiles, then a "reconfigure" event shall be triggered, which will force
             // installation of a compatible system preset, thus nullifying the system preset substitutions.
+            if (scrn)
+                scrn->ProcessPendingEvents();
             init_params->preset_substitutions = preset_bundle->load_presets(*app_config, ForwardCompatibilitySubstitutionRule::EnableSystemSilent);
         }
         catch (const std::exception& ex) {
@@ -3115,6 +3131,8 @@ bool GUI_App::on_init_inner()
 #endif
 
     BOOST_LOG_TRIVIAL(info) << "create the main window";
+    if (scrn)
+        scrn->ProcessPendingEvents();
     mainframe = new MainFrame();
     // hide settings tabs after first Layout
     if (is_editor()) {
@@ -3138,8 +3156,11 @@ bool GUI_App::on_init_inner()
             // ensure the selected technology is ptFFF
             plater_->set_printer_technology(ptFFF);
     }
-    else
+    else {
+        if (scrn)
+            scrn->ProcessPendingEvents();
         load_current_presets();
+    }
 
     if (plater_ != nullptr) {
         plater_->reset_project_dirty_initial_presets();
@@ -3241,6 +3262,11 @@ bool GUI_App::on_init_inner()
     flush_logs();
 
     BOOST_LOG_TRIVIAL(info) << "finished the gui app init";
+    // Keep splash lifetime explicit. wxSPLASH_TIMEOUT may destroy the window
+    // before long network/plugin startup completes, leaving a dangling pointer.
+    delete scrn;
+    scrn = nullptr;
+
     if (m_config_corrupted) {
         m_config_corrupted = false;
         show_error(nullptr,
@@ -3358,8 +3384,23 @@ void GUI_App::copy_network_if_available()
     app_config->set("update_network_plugin", "false");
 }
 
-bool GUI_App::on_init_network(bool try_backup)
+bool GUI_App::on_init_network(bool try_backup, std::function<void()> process_events)
 {
+    auto process_pending_events = [&process_events]() {
+        if (process_events)
+            process_events();
+    };
+    auto run_agent_call_with_event_pump = [&process_pending_events](std::function<int()> call) {
+        auto result = std::async(std::launch::async, std::move(call));
+        while (result.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+            if (wxTheApp)
+                wxTheApp->ProcessPendingEvents();
+            wxYieldIfNeeded();
+        }
+        return result.get();
+    };
+
+    process_pending_events();
     auto should_load_networking_plugin = app_config->get_bool("installed_networking");
 
     std::string config_version = app_config->get_network_plugin_version();
@@ -3377,11 +3418,13 @@ bool GUI_App::on_init_network(bool try_backup)
             return false;
         }
 
+        process_pending_events();
         int load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(false, config_version);
     __retry:
         if (!load_agent_dll) {
             BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, load dll ok";
 
+            process_pending_events();
             std::string loaded_version = Slic3r::NetworkAgent::get_version();
             if (app_config && !loaded_version.empty() && loaded_version != "00.00.00.00") {
                 std::string config_version = app_config->get_network_plugin_version();
@@ -3394,8 +3437,10 @@ bool GUI_App::on_init_network(bool try_backup)
                 }
             }
 
+            process_pending_events();
             if (check_networking_version()) {
                 BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": on_init_network, compatibility version";
+                process_pending_events();
                 auto bambu_source = Slic3r::NetworkAgent::get_bambu_source_entry();
                 if (!bambu_source) {
                     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << ": can not get bambu source module!";
@@ -3406,6 +3451,7 @@ bool GUI_App::on_init_network(bool try_backup)
                 }
             } else {
                 if (try_backup) {
+                    process_pending_events();
                     int result = Slic3r::NetworkAgent::unload_network_module();
                     BOOST_LOG_TRIVIAL(info) << "on_init_network, version mismatch, unload_network_module, result = " << result;
                     load_agent_dll = Slic3r::NetworkAgent::initialize_network_module(true, config_version);
@@ -3426,6 +3472,7 @@ bool GUI_App::on_init_network(bool try_backup)
         }
     }
 
+    process_pending_events();
     BOOST_LOG_TRIVIAL(info) << __FUNCTION__ << boost::format(", create network agent...");
     //std::string data_dir = wxStandardPaths::Get().GetUserDataDir().ToUTF8().data();
     std::string data_directory = data_dir();
@@ -3434,9 +3481,11 @@ bool GUI_App::on_init_network(bool try_backup)
     Slic3r::NetworkAgentFactory::register_all_agents();
 
     // m_agent = new Slic3r::NetworkAgent(data_directory);
+    process_pending_events();
     std::unique_ptr<Slic3r::NetworkAgent> agent_ptr = Slic3r::create_agent_from_config(data_directory, app_config);
     m_agent = agent_ptr.release();
 
+    process_pending_events();
     if (!m_device_manager)
         m_device_manager = new Slic3r::DeviceManager(m_agent);
     else
@@ -3460,27 +3509,39 @@ bool GUI_App::on_init_network(bool try_backup)
 
     //BBS set config dir
     if (m_agent) {
+        process_pending_events();
         m_agent->set_config_dir(data_directory);
     }
     //BBS start http log
     if (m_agent) {
+        process_pending_events();
         m_agent->init_log();
     }
 
     //BBS set cert dir
-    if (m_agent)
+    if (m_agent) {
+        process_pending_events();
         m_agent->set_cert_file(resources_dir() + "/cert", "slicer_base64.cer");
+    }
 
+    process_pending_events();
     init_http_extra_header();
 
     if (m_agent) {
+        process_pending_events();
         init_networking_callbacks();
         std::string country_code = app_config->get_country_code();
-        m_agent->set_country_code(country_code);
-        m_agent->start();
+        run_agent_call_with_event_pump([this, country_code] {
+            return m_agent->set_country_code(country_code);
+        });
+        process_pending_events();
+        run_agent_call_with_event_pump([this] {
+            return m_agent->start();
+        });
     }
 
     if (!should_load_networking_plugin) {
+        process_pending_events();
         int result = Slic3r::NetworkAgent::unload_network_module();
         BOOST_LOG_TRIVIAL(info) << "on_init_network, unload_network_module, result = " << result;
 
@@ -3509,6 +3570,7 @@ bool GUI_App::on_init_network(bool try_backup)
         }
     }
 
+    process_pending_events();
     return true;
 }
 

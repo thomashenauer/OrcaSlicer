@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <functional>
 #include "ImGuiWrapper.hpp"
 #include "ConfigWizard.hpp"
 #include "OpenGLManager.hpp"
@@ -749,7 +750,7 @@ private:
     int             updating_bambu_networking();
     bool            on_init_inner();
     void            copy_network_if_available();
-    bool            on_init_network(bool try_backup = false);
+    bool            on_init_network(bool try_backup = false, std::function<void()> process_events = {});
     void            init_networking_callbacks();
     void            init_app_config();
     void            remove_old_networking_plugins();

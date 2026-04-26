@@ -52,18 +52,6 @@ static void tune_live_preview_sink(GstElement *element)
     set_int64_property_if_present(obj, "max-lateness", -1);
 }
 
-static bool has_avdec_h264_decoder()
-{
-    static const bool has_decoder = []() {
-        GstElementFactory *factory = gst_element_factory_find("avdec_h264");
-        if (!factory)
-            return false;
-        gst_object_unref(factory);
-        return true;
-    }();
-    return has_decoder;
-}
-
 static bool is_bambu_uri_for_playbin(GstElement *playbin)
 {
     if (!playbin)
@@ -81,58 +69,6 @@ static bool is_bambu_uri_for_playbin(GstElement *playbin)
     return is_bambu;
 }
 
-static gint on_uridecodebin_autoplug_select(GstElement * /*decodebin*/, GstPad * /*pad*/, GstCaps * /*caps*/, GstElementFactory *factory, gpointer user_data)
-{
-    auto *playbin = GST_ELEMENT(user_data);
-    if (!factory)
-        return 0; // GST_AUTOPLUG_SELECT_TRY
-
-    const gchar *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
-    const bool is_bambu = is_bambu_uri_for_playbin(playbin);
-    if (!is_bambu)
-        return 0; // GST_AUTOPLUG_SELECT_TRY
-    if (!factory_name)
-        return 0;
-
-    // Only skip NVIDIA HW decode if a robust software fallback (libav) exists in this runtime.
-    const bool can_fallback_to_sw = has_avdec_h264_decoder();
-
-    // For Bambu live preview, skip NVIDIA HW decoders to avoid CUDAMemory-only output negotiation.
-    if (g_strcmp0(factory_name, "nvh264dec") == 0 || g_strcmp0(factory_name, "nvh265dec") == 0) {
-        if (!can_fallback_to_sw)
-            return 0; // Keep stream working rather than black video.
-        return 2; // GST_AUTOPLUG_SELECT_SKIP
-    }
-
-    return 0;
-}
-
-static void maybe_attach_bambu_decoder_filter(GstElement *playbin, GstElement *element)
-{
-    if (!playbin || !element)
-        return;
-
-    auto *factory = gst_element_get_factory(element);
-    if (!factory)
-        return;
-    const gchar *factory_name = gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory));
-    if (!factory_name)
-        return;
-    const bool is_uri_decodebin = g_str_has_prefix(factory_name, "uridecodebin");
-    const bool is_decodebin = g_str_has_prefix(factory_name, "decodebin");
-    if (!is_uri_decodebin && !is_decodebin)
-        return;
-
-    static GQuark attached_quark = 0;
-    if (attached_quark == 0)
-        attached_quark = g_quark_from_static_string("orca-bambu-autoplug-filter-attached");
-    if (g_object_get_qdata(G_OBJECT(element), attached_quark) != nullptr)
-        return;
-
-    g_signal_connect(element, "autoplug-select", G_CALLBACK(on_uridecodebin_autoplug_select), playbin);
-    g_object_set_qdata(G_OBJECT(element), attached_quark, GINT_TO_POINTER(1));
-}
-
 static void on_playbin_deep_element_added(GstBin *playbin, GstBin * /*sub_bin*/, GstElement *element, gpointer /*user_data*/)
 {
     auto *playbin_element = GST_ELEMENT(playbin);
@@ -141,7 +77,6 @@ static void on_playbin_deep_element_added(GstBin *playbin, GstBin * /*sub_bin*/,
 
     if (GST_IS_BASE_SINK(element))
         tune_live_preview_sink(element);
-    maybe_attach_bambu_decoder_filter(playbin_element, element);
 }
 #endif
 

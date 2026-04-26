@@ -264,7 +264,7 @@ void MediaPlayCtrl::Play()
         return;
     }
     m_failed_code = 0;
-    m_stop_requested = false;
+    m_stop_requested.store(false, std::memory_order_relaxed);
     if (m_machine.empty()) {
         Stop(_L("Please confirm if the printer is connected."));
         return;
@@ -392,7 +392,7 @@ void MediaPlayCtrl::Stop(wxString const &msg, wxString const &msg2)
         m_media_ctrl->InvalidateBestSize();
         m_button_play->SetIcon("media_play");
         boost::unique_lock lock(m_mutex);
-        m_stop_requested = true;
+        m_stop_requested.store(true, std::memory_order_relaxed);
         if (m_tasks.empty() || m_tasks.back() != "<stop>")
             m_tasks.push_back("<stop>");
         m_cond.notify_all();
@@ -623,7 +623,7 @@ void MediaPlayCtrl::onStateChanged(wxMediaEvent &event)
         if (size.GetWidth() >= 320) {
             m_last_state = state;
             m_failed_code = 0;
-            m_stop_requested = false;
+            m_stop_requested.store(false, std::memory_order_relaxed);
             SetStatus(_L("Playing..."), false);
 
 

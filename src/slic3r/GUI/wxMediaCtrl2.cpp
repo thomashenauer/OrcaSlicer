@@ -218,11 +218,27 @@ void wxMediaCtrl2::Stop()
     if (m_imp != nullptr) {
         auto playbin = reinterpret_cast<wxGStreamerMediaBackend *>(m_imp)->m_playbin;
         if (playbin) {
-            gst_element_set_state(playbin, GST_STATE_READY);
-            gst_element_get_state(playbin, nullptr, nullptr, 200 * GST_MSECOND);
-            gst_element_set_state(playbin, GST_STATE_NULL);
-            gst_element_get_state(playbin, nullptr, nullptr, 1000 * GST_MSECOND);
-            g_object_set(G_OBJECT(playbin), "uri", NULL, NULL);
+            auto wait_for_transition = [playbin](GstState target_state, GstClockTime timeout, const char *target_name) {
+                GstStateChangeReturn set_ret = gst_element_set_state(playbin, target_state);
+                if (set_ret == GST_STATE_CHANGE_FAILURE) {
+                    BOOST_LOG_TRIVIAL(warning)
+                        << "wxMediaCtrl2::Stop: failed to request playbin " << target_name
+                        << ", ret=" << static_cast<int>(set_ret);
+                    return;
+                }
+
+                GstStateChangeReturn wait_ret = gst_element_get_state(playbin, nullptr, nullptr, timeout);
+                if (wait_ret == GST_STATE_CHANGE_FAILURE || wait_ret == GST_STATE_CHANGE_ASYNC) {
+                    BOOST_LOG_TRIVIAL(warning)
+                        << "wxMediaCtrl2::Stop: playbin transition to " << target_name
+                        << " did not complete cleanly, ret=" << static_cast<int>(wait_ret);
+                }
+            };
+
+            wait_for_transition(GST_STATE_READY, 200 * GST_MSECOND, "READY");
+            wait_for_transition(GST_STATE_NULL, 1000 * GST_MSECOND, "NULL");
+
+            g_object_set(G_OBJECT(playbin), "uri", nullptr, nullptr);
         }
     }
 #endif

@@ -103,6 +103,8 @@ private:
     void OnSelectedMachineLost();
     void OnSelectedMachineChanged(const std::string& pre_dev_id, const std::string& new_dev_id);
 
+    void record_user_last_machine(const std::string& dev_id);
+    std::string get_user_last_machine() const;
 
     /*TODO*/
 public:

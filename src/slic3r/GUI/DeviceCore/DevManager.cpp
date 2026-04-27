@@ -559,6 +559,8 @@ namespace Slic3r
         }
 
         selected_machine = dev_id;
+        if (!selected_machine.empty() && it != my_machine_list.end())
+            record_user_last_machine(selected_machine);
         return true;
     }
 
@@ -820,6 +822,23 @@ namespace Slic3r
         }
     }
 
+    void DeviceManager::record_user_last_machine(const std::string& dev_id)
+    {
+        if (GUI::wxGetApp().app_config)
+            GUI::wxGetApp().app_config->set("user_last_selected_machine", dev_id);
+    }
+
+    std::string DeviceManager::get_user_last_machine() const
+    {
+        if (GUI::wxGetApp().app_config) {
+            const auto& user_last_machine = GUI::wxGetApp().app_config->get("user_last_selected_machine");
+            if (!user_last_machine.empty())
+                return user_last_machine;
+        }
+
+        return m_agent ? m_agent->get_user_selected_machine() : "";
+    }
+
     void DeviceManager::load_last_machine()
     {
         // Get all available machines, include cloud machines and lan machines that have access right
@@ -828,7 +847,7 @@ namespace Slic3r
             return;
         
         // Then connect to the machine we last selected if available
-        const std::string last_monitor_machine = m_agent ? m_agent->get_user_selected_machine() : "";
+        const std::string last_monitor_machine = get_user_last_machine();
         const auto        last_machine         = all_machines.find(last_monitor_machine);
         if (last_machine != all_machines.end()) {
             this->set_selected_machine(last_machine->second->get_dev_id());

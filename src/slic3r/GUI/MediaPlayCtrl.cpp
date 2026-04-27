@@ -839,6 +839,12 @@ void wxMediaCtrl2::DoSetSize(int x, int y, int width, int height, int sizeFlags)
 #else
     wxMediaCtrl::DoSetSize(x, y, width, height, sizeFlags);
 #endif
+#if defined(__LINUX__) && defined(__WXGTK__)
+    if (m_gtk_video_window) {
+        const wxSize client_size = GetClientSize();
+        m_gtk_video_window->SetSize(0, 0, client_size.GetWidth(), client_size.GetHeight());
+    }
+#endif
     if (sizeFlags & wxSIZE_USE_EXISTING) return;
     wxSize size = m_video_size;
     int maxHeight = (width * size.GetHeight() + size.GetHeight() - 1) / size.GetWidth();
@@ -853,4 +859,3 @@ void wxMediaCtrl2::DoSetSize(int x, int y, int width, int height, int sizeFlags)
         });
     }
 }
-

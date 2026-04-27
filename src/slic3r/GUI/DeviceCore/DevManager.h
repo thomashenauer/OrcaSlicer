@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <memory>
 #include <mutex>
 #include "libslic3r/CommonDefs.hpp"
 
@@ -29,6 +31,8 @@ private:
     bool m_enable_mutil_machine = false;
 
     std::mutex listMutex;
+    std::shared_ptr<std::atomic<unsigned long long>> m_selection_request_id{ std::make_shared<std::atomic<unsigned long long>>(0) };
+    std::shared_ptr<std::mutex> m_selection_network_mutex{ std::make_shared<std::mutex>() };
     std::string selected_machine;                               /* dev_id */
     std::string local_selected_machine;                         /* dev_id */
     std::map<std::string, MachineObject*> localMachineList;     /* dev_id -> MachineObject*, localMachine SSDP   */

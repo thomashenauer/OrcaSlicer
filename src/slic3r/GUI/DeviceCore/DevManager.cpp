@@ -2,11 +2,15 @@
 #include "DevManager.h"
 #include "DevUtil.h"
 
+#include <thread>
+#include <utility>
+
 // TODO: remove this include
 #include "slic3r/GUI/DeviceManager.hpp"
 #include "slic3r/GUI/I18N.hpp"
 #include "slic3r/GUI/GUI_App.hpp"
 #include "slic3r/GUI/Plater.hpp"
+#include "slic3r/Utils/IPrinterAgent.hpp"
 
 #include "libslic3r/Time.hpp"
 
@@ -14,6 +18,62 @@ using namespace nlohmann;
 
 namespace Slic3r
 {
+    namespace {
+        enum class SelectionConnectionType {
+            None,
+            Cloud,
+            Lan
+        };
+
+        struct PrinterSelectionTask {
+            SelectionConnectionType previous{ SelectionConnectionType::None };
+            SelectionConnectionType next{ SelectionConnectionType::None };
+            std::string dev_id;
+            std::string dev_ip;
+            std::string access_code;
+            bool use_ssl{ false };
+
+            bool has_work() const
+            {
+                return previous != SelectionConnectionType::None || next != SelectionConnectionType::None;
+            }
+        };
+
+        template<class Fn>
+        void run_printer_agent_task(std::shared_ptr<IPrinterAgent> printer_agent,
+                                    std::shared_ptr<std::mutex> serial_mutex,
+                                    std::shared_ptr<std::atomic<unsigned long long>> latest_request,
+                                    unsigned long long request_id,
+                                    Fn&& fn)
+        {
+            if (!printer_agent || !serial_mutex || !latest_request)
+                return;
+
+            // Some network-plugin selection calls block long enough to trip compositor
+            // unresponsive checks. Keep them off the GUI thread and serialize them
+            // because the underlying printer agent manages a single active printer.
+            std::thread([printer_agent = std::move(printer_agent),
+                         serial_mutex = std::move(serial_mutex),
+                         latest_request = std::move(latest_request),
+                         request_id,
+                         fn = std::forward<Fn>(fn)]() mutable {
+                std::lock_guard<std::mutex> lock(*serial_mutex);
+                if (latest_request->load() != request_id)
+                    return;
+
+                try {
+                    fn(*printer_agent, [latest_request, request_id] {
+                        return latest_request->load() == request_id;
+                    });
+                } catch (const std::exception& e) {
+                    BOOST_LOG_TRIVIAL(error) << "DeviceManager printer selection task exception: " << e.what();
+                } catch (...) {
+                    BOOST_LOG_TRIVIAL(error) << "DeviceManager printer selection task unknown exception";
+                }
+            }).detach();
+        }
+    }
+
     DeviceManager::DeviceManager(NetworkAgent* agent)
     {
         m_agent = agent;
@@ -67,6 +127,9 @@ namespace Slic3r
 
     DeviceManager::~DeviceManager()
     {
+        if (m_selection_request_id)
+            m_selection_request_id->fetch_add(1);
+
         delete m_refresher;
 
         for (auto it = localMachineList.begin(); it != localMachineList.end(); it++)
@@ -470,6 +533,10 @@ namespace Slic3r
             << " cur_selected=" << selected_machine;
         auto my_machine_list = get_my_machine_list();
         auto it = my_machine_list.find(dev_id);
+        auto printer_agent = m_agent ? m_agent->get_printer_agent() : nullptr;
+        const unsigned long long request_id = m_selection_request_id->fetch_add(1) + 1;
+        PrinterSelectionTask selection_task;
+        selection_task.dev_id = dev_id;
 
         // disconnect last if dev_id difference from previous one
         auto last_selected = my_machine_list.find(selected_machine);
@@ -477,10 +544,10 @@ namespace Slic3r
         {
             if (last_selected->second->connection_type() == "lan")
             {
-                m_agent->disconnect_printer();
+                selection_task.previous = SelectionConnectionType::Lan;
             }
             else if (last_selected->second->connection_type() == "cloud") {
-                m_agent->set_user_selected_machine("");
+                selection_task.previous = SelectionConnectionType::Cloud;
             }
         }
 
@@ -512,13 +579,16 @@ namespace Slic3r
                     // lan mode printer reconnect printer
                     if (m_agent)
                     {
-                        m_agent->disconnect_printer();
                         it->second->reset();
+                        selection_task.previous = SelectionConnectionType::Lan;
+                        selection_task.next = SelectionConnectionType::Lan;
+                        selection_task.dev_ip = it->second->get_dev_ip();
+                        selection_task.access_code = it->second->get_access_code();
 
 #if !BBL_RELEASE_TO_PUBLIC
-                        it->second->connect(Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true" ? true : false);
+                        selection_task.use_ssl = Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true";
 #else
-                        it->second->connect(it->second->local_use_ssl);
+                        selection_task.use_ssl = it->second->local_use_ssl;
 #endif
                         it->second->set_lan_mode_connection_state(true);
                     }
@@ -532,17 +602,20 @@ namespace Slic3r
                     {
                         // diff dev_id, cloud => set_user_selected_machine(new)
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new cloud machine, dev_id =" << dev_id;
-                        m_agent->set_user_selected_machine(dev_id);
+                        selection_task.next = SelectionConnectionType::Cloud;
                         it->second->reset();
                     }
                     else
                     {
                         BOOST_LOG_TRIVIAL(info) << "set_selected_machine: select new lan machine, dev_id =" << dev_id;
                         it->second->reset();
+                        selection_task.next = SelectionConnectionType::Lan;
+                        selection_task.dev_ip = it->second->get_dev_ip();
+                        selection_task.access_code = it->second->get_access_code();
 #if !BBL_RELEASE_TO_PUBLIC
-                        it->second->connect(Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true" ? true : false);
+                        selection_task.use_ssl = Slic3r::GUI::wxGetApp().app_config->get("enable_ssl_for_mqtt") == "true";
 #else
-                        it->second->connect(it->second->local_use_ssl);
+                        selection_task.use_ssl = it->second->local_use_ssl;
 #endif
                         it->second->set_lan_mode_connection_state(true);
                     }
@@ -552,6 +625,31 @@ namespace Slic3r
             {
                 data.second.checked_filament.clear();
             }
+        }
+
+        if (selection_task.has_work()) {
+            run_printer_agent_task(printer_agent,
+                                   m_selection_network_mutex,
+                                   m_selection_request_id,
+                                   request_id,
+                                   [selection_task](IPrinterAgent& agent, auto is_current) {
+                if (selection_task.previous == SelectionConnectionType::Lan)
+                    agent.disconnect_printer();
+                else if (selection_task.previous == SelectionConnectionType::Cloud)
+                    agent.set_user_selected_machine("");
+
+                if (!is_current())
+                    return;
+
+                if (selection_task.next == SelectionConnectionType::Cloud)
+                    agent.set_user_selected_machine(selection_task.dev_id);
+                else if (selection_task.next == SelectionConnectionType::Lan && !selection_task.dev_ip.empty())
+                    agent.connect_printer(selection_task.dev_id,
+                                          selection_task.dev_ip,
+                                          "bblp",
+                                          selection_task.access_code,
+                                          selection_task.use_ssl);
+            });
         }
 
         if (selected_machine != dev_id) {

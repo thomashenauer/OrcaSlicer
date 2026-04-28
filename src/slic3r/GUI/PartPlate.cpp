@@ -923,7 +923,7 @@ void PartPlate::render_wrapping_detection_area(bool force_default_color)
 }
 
 void PartPlate::render_exclude_area(bool force_default_color) {
-	if (force_default_color) //for thumbnail case
+	if (force_default_color || !m_exclude_triangles.is_initialized())
 		return;
 
 	ColorRGBA select_color{   .9f, .86f, .82f, .7f }; // ORCA

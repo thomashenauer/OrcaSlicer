@@ -30,6 +30,9 @@
 #include <regex>
 #include <thread>
 #include <string_view>
+#ifdef __linux__
+#include <sys/resource.h>
+#endif
 #include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/format.hpp>
@@ -188,6 +191,31 @@ namespace Slic3r {
 namespace GUI {
 
 class MainFrame;
+
+#ifdef __linux__
+static void raise_startup_nofile_limit()
+{
+    static constexpr rlim_t target_soft_limit = 8192;
+
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_NOFILE, &limit) != 0)
+        return;
+
+    if (limit.rlim_cur >= target_soft_limit)
+        return;
+
+    const rlim_t requested_soft_limit = std::min(target_soft_limit, limit.rlim_max);
+    if (requested_soft_limit <= limit.rlim_cur)
+        return;
+
+    const rlim_t previous_soft_limit = limit.rlim_cur;
+    limit.rlim_cur = requested_soft_limit;
+    if (setrlimit(RLIMIT_NOFILE, &limit) == 0)
+        BOOST_LOG_TRIVIAL(info) << "Raised soft open file limit from " << previous_soft_limit << " to " << requested_soft_limit;
+    else
+        BOOST_LOG_TRIVIAL(warning) << "Unable to raise soft open file limit from " << previous_soft_limit << " to " << requested_soft_limit;
+}
+#endif
 
 void start_ping_test()
 {
@@ -2651,6 +2679,9 @@ bool GUI_App::on_init_inner()
     wxLog::SetActiveTarget(new wxBoostLog());
 #if BBL_RELEASE_TO_PUBLIC
     wxLog::SetLogLevel(wxLOG_Message);
+#endif
+#ifdef __linux__
+    raise_startup_nofile_limit();
 #endif
 
     ::Label::initSysFont();

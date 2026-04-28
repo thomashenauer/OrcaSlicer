@@ -5193,6 +5193,22 @@ void PrinterInfoBox::SetPrinters(const std::vector<MachineObject*>& sorted_print
 {
     m_comboBox_printer->Clear();
 
+    auto load_printer_preview = [this](const std::string& preview_name, int px_cnt) {
+        try {
+            return create_scaled_bitmap(preview_name, this, px_cnt);
+        } catch (const std::exception& e) {
+            BOOST_LOG_TRIVIAL(warning) << "PrinterInfoBox::SetPrinters: failed to load " << preview_name << ": " << e.what();
+        }
+
+        try {
+            return create_scaled_bitmap("printer_preview_BL-P001", this, px_cnt);
+        } catch (const std::exception& e) {
+            BOOST_LOG_TRIVIAL(warning) << "PrinterInfoBox::SetPrinters: failed to load fallback printer preview: " << e.what();
+        }
+
+        return wxBitmap();
+    };
+
     std::vector<DropDown::Item> drop_items;
     for (MachineObject* obj : sorted_printers)
     {
@@ -5206,16 +5222,9 @@ void PrinterInfoBox::SetPrinters(const std::vector<MachineObject*>& sorted_print
         drop_item.text_static_tips = _get_tips(obj);
 
         // update image
-        try
-        {
-            drop_item.icon = create_scaled_bitmap("printer_preview_" + obj->printer_type, this, 32);
-            drop_item.icon_textctrl = create_scaled_bitmap("printer_preview_" + obj->printer_type, this, 52);
-        }
-        catch (const std::exception&)
-        {
-            drop_item.icon = create_scaled_bitmap("printer_preview_BL-P001", this, 32);
-            drop_item.icon_textctrl = create_scaled_bitmap("printer_preview_BL-P001", this, 52);
-        }
+        const std::string preview_name = "printer_preview_" + obj->printer_type;
+        drop_item.icon = load_printer_preview(preview_name, 32);
+        drop_item.icon_textctrl = load_printer_preview(preview_name, 52);
 
         drop_item.tip = obj->get_printer_type_display_str();
         drop_items.emplace_back(drop_item);

@@ -336,10 +336,18 @@ wxGLContext* OpenGLManager::init_glcontext(wxGLCanvas& canvas, const std::pair<i
 
         const int gl_major = required_opengl_version.first;
         const int gl_minor = required_opengl_version.second;
+        bool prefer_compatibility_profile = enable_compatibility_profile;
+#ifdef __WXGTK__
+        // Let GTK choose a compatible context when the caller did not request
+        // a specific OpenGL version. Probing core profiles first can fail during
+        // early startup on GTK/Wayland before the main window is responsive.
+        if (gl_major == 0)
+            prefer_compatibility_profile = true;
+#endif
         const bool supports_core_profile =
             std::find(OpenGLVersions::core.begin(), OpenGLVersions::core.end(), std::make_pair(gl_major, gl_minor)) != OpenGLVersions::core.end();
 
-        if (gl_major == 0 && !enable_compatibility_profile) {
+        if (gl_major == 0 && !prefer_compatibility_profile) {
             // search for highest supported core profile version
             // disable wxWidgets logging to avoid showing the log dialog in case the following code fails generating a valid gl context
             wxLogNull logNo;
@@ -361,7 +369,7 @@ wxGLContext* OpenGLManager::init_glcontext(wxGLCanvas& canvas, const std::pair<i
 
         if (m_context == nullptr) {
             // search for requested compatibility profile version
-            if (enable_compatibility_profile) {
+            if (prefer_compatibility_profile) {
                 // disable wxWidgets logging to avoid showing the log dialog in case the following code fails generating a valid gl context
                 wxLogNull logNo;
                 wxGLContextAttrs attrs;

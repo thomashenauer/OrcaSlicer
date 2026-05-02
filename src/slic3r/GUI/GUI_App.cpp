@@ -310,6 +310,7 @@ public:
         // draw logo and constant info text
         Decorate(m_main_bitmap);
         wxGetApp().UpdateFrameDarkUI(this);
+        set_bitmap(m_main_bitmap);
     }
 
     void SetText(const wxString& text)

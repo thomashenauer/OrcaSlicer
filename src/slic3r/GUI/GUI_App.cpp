@@ -316,20 +316,14 @@ public:
         dc.SetTextForeground(m_fg_color);
 
         dc.SetFont(m_font_version);
-        rc.y      = c_sz.GetHeight() * 0.70;
+        rc.y      = c_sz.GetHeight() * 0.72;
         rc.height = dc.GetTextExtent(m_text_version).GetHeight();
         dc.DrawLabel(m_text_version, rc, wxALIGN_CENTER);
 
         dc.SetFont(m_font_action);
-        rc.y      = c_sz.GetHeight() * 0.83;
+        rc.y      = c_sz.GetHeight() * 0.88;
         rc.height = dc.GetTextExtent(m_text_action).GetHeight();
         dc.DrawLabel(m_text_action, rc, wxALIGN_CENTER);
-
-        dc.SetFont(m_font_credits);
-        wxSize be = dc.GetTextExtent(m_text_credits);
-        rc.y      = c_sz.GetHeight() - be.GetHeight() * 2;
-        rc.height = be.GetHeight();
-        dc.DrawLabel(m_text_credits, rc, wxALIGN_CENTER);
     }
 
     void SetText(const wxString& text)
@@ -339,6 +333,7 @@ public:
             m_window->Refresh();
             m_window->Update();
 #ifdef __WXOSX__
+            // without this code splash screen wouldn't be updated under OSX
             wxYield();
 #endif
         }
@@ -368,11 +363,9 @@ private:
 
     wxString m_text_version = GUI_App::format_display_version();
     wxString m_text_action  = _L("Loading configuration") + dots;
-    wxString m_text_credits = _L("Based on PrusaSlicer and BambuStudio");
 
     wxFont m_font_version = Label::Body_16;
     wxFont m_font_action  = Label::Body_16;
-    wxFont m_font_credits = Label::Body_13;
 };
 
 #ifdef __linux__

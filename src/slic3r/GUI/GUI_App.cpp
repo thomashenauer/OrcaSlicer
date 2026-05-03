@@ -276,8 +276,8 @@ bool is_associate_files(std::wstring extend)
 class SplashScreen : public wxSplashScreen
 {
 public:
-    SplashScreen(wxWindow* parent, wxPoint pos = wxDefaultPosition)
-        : wxSplashScreen(wxBitmap(parent->FromDIP(wxSize(480,480))), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+    SplashScreen(wxPoint pos = wxDefaultPosition)
+        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
 #else
@@ -2755,7 +2755,7 @@ bool GUI_App::on_init_inner()
 
         BOOST_LOG_TRIVIAL(info) << "begin to show the splash screen...";
         //BBS use BBL splashScreen
-        scrn = new SplashScreen(static_cast<wxWindow*>(wxGetApp().mainframe), splashscreen_pos);
+        scrn = new SplashScreen(splashscreen_pos);
         wxYield();
         //scrn->SetText(_L("Loading configuration")+ dots);
     }

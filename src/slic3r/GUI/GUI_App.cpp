@@ -273,11 +273,11 @@ bool is_associate_files(std::wstring extend)
 }
 #endif
 
-class SplashScreen : public wxSplashScreen
+class SplashScreen : public wxFrame
 {
 public:
     SplashScreen(wxPoint pos = wxDefaultPosition)
-        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+        : wxFrame(nullptr, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
 #else
@@ -285,21 +285,41 @@ public:
 #endif // !__APPLE__
         )
     {
-        this->SetPosition(pos);
-        this->CenterOnScreen();
+        SetExtraStyle(GetExtraStyle() | wxWS_EX_TRANSIENT);
+#ifdef __WXGTK__
+        apply_gtk_splash_hints();
+#endif // __WXGTK__
 
         scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
 
         m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
         m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
         bool dark_mode = m_fg_color != wxColour("#6B6A6A");
-        wxSize sz  = m_window->GetClientSize();
+        const wxSize splash_size = FromDIP(wxSize(480, 480), nullptr);
+        m_window = new wxWindow(this, wxID_ANY, wxDefaultPosition, splash_size, wxBORDER_NONE);
+        SetClientSize(splash_size);
+        const wxSize client_size = m_window->GetClientSize();
         BitmapCache bmp_cache;
-        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
+        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", client_size.GetWidth(), client_size.GetHeight());
 
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
         m_window->Update();
+
+        this->SetPosition(pos);
+        this->CenterOnScreen();
+
+        m_timer.SetOwner(this);
+        Bind(wxEVT_TIMER, [this](wxTimerEvent&) { Close(true); });
+        Bind(wxEVT_CLOSE_WINDOW, [this](wxCloseEvent&) {
+            m_timer.Stop();
+            Destroy();
+        });
+        m_timer.Start(1500, true);
+
+        Show(true);
+        m_window->SetFocus();
+        Update();
     }
 
     void OnPaint(wxPaintEvent& evt)
@@ -357,6 +377,32 @@ public:
     }
 
 private:
+#ifdef __WXGTK__
+    void apply_gtk_splash_hints()
+    {
+        GtkWidget* widget = GetHandle();
+        if (!widget || !GTK_IS_WINDOW(widget))
+            return;
+
+        GtkWindow* gtk_window = GTK_WINDOW(widget);
+        gtk_window_set_type_hint(gtk_window, GDK_WINDOW_TYPE_HINT_SPLASHSCREEN);
+        gtk_window_set_skip_taskbar_hint(gtk_window, TRUE);
+        gtk_window_set_skip_pager_hint(gtk_window, TRUE);
+        gtk_window_set_resizable(gtk_window, FALSE);
+
+#if GTK_CHECK_VERSION(3, 10, 0)
+        GtkWidget* titlebar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+        gtk_widget_set_size_request(titlebar, 0, 0);
+        gtk_window_set_titlebar(gtk_window, titlebar);
+#endif // GTK_CHECK_VERSION(3, 10, 0)
+
+        gtk_window_set_decorated(gtk_window, FALSE);
+    }
+#endif // __WXGTK__
+
+    wxWindow* m_window { nullptr };
+    wxTimer   m_timer;
+
     wxBitmap m_logo_bmp;
     wxColour m_fg_color;
     wxColour m_bg_color;

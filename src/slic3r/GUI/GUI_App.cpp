@@ -277,20 +277,33 @@ class SplashScreen : public wxSplashScreen
 {
 public:
     SplashScreen(wxPoint pos = wxDefaultPosition)
-        : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-#ifdef __APPLE__
-            wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
-#else
-            wxBORDER_NONE | wxFRAME_NO_TASKBAR
-#endif // !__APPLE__
-        )
     {
+        const wxBitmap bitmap(FromDIP(wxSize(480,480),nullptr));
+        const long splash_style = wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT;
+        const int milliseconds = 1500;
+
+        wxFrame::Create(nullptr, wxID_ANY, wxEmptyString, wxPoint(0, 0), wxSize(100, 100),
+#ifdef __APPLE__
+            wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP |
+#else
+            wxBORDER_NONE | wxFRAME_NO_TASKBAR |
+#endif // !__APPLE__
+            wxFRAME_TOOL_WINDOW);
+
+        SetExtraStyle(GetExtraStyle() | wxWS_EX_TRANSIENT);
 #ifdef __WXGTK__
         apply_gtk_splash_hints();
 #endif // __WXGTK__
 
-        this->SetPosition(pos);
-        this->CenterOnScreen();
+        m_splashStyle = splash_style;
+        m_milliseconds = milliseconds;
+        m_window = new wxSplashScreenWindow(bitmap, this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxNO_BORDER);
+        SetClientSize(bitmap.GetLogicalSize());
+
+        if (m_splashStyle & wxSPLASH_CENTRE_ON_PARENT)
+            CentreOnParent();
+        else if (m_splashStyle & wxSPLASH_CENTRE_ON_SCREEN)
+            CentreOnScreen();
 
         scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
 
@@ -304,6 +317,23 @@ public:
         m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
         m_window->Refresh();
         m_window->Update();
+
+        if (pos != wxDefaultPosition) {
+            this->SetPosition(pos);
+            this->CenterOnScreen();
+        }
+
+        if (m_splashStyle & wxSPLASH_TIMEOUT) {
+            m_timer.SetOwner(this);
+            Bind(wxEVT_TIMER, [this](wxTimerEvent&) { Close(true); });
+            m_timer.Start(milliseconds, true);
+        }
+
+        Show(true);
+        m_window->SetFocus();
+#if defined( __WXMSW__ ) || defined(__WXMAC__)
+        Update();
+#endif
     }
 
     void OnPaint(wxPaintEvent& evt)

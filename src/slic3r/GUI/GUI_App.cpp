@@ -2361,6 +2361,11 @@ void GUI_App::init_app_config()
 {
 	// Profiles for the alpha are stored into the PrusaSlicer-alpha directory to not mix with the current release.
     SetAppName(SLIC3R_APP_KEY);
+#ifdef __WXGTK__
+    // wxGTK uses the class name as the Wayland app id. Keep it aligned with
+    // the installed desktop file so compositors can resolve Orca's icon.
+    SetClassName("com.orcaslicer.OrcaSlicer");
+#endif
 //	SetAppName(SLIC3R_APP_KEY "-alpha");
 //  SetAppName(SLIC3R_APP_KEY "-beta");
 //	SetAppDisplayName(SLIC3R_APP_NAME);

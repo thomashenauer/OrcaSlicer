@@ -172,6 +172,9 @@ typedef BOOL (WINAPI *LPFN_ISWOW64PROCESS2)(
 // Needed for forcing menu icons back under gtk2 and gtk3
 #if defined(__WXGTK20__) || defined(__WXGTK3__)
     #include <gtk/gtk.h>
+    #ifdef GDK_WINDOWING_WAYLAND
+        #include <gdk/gdkwayland.h>
+    #endif
 #endif
 
 using namespace std::literals;
@@ -403,6 +406,16 @@ private:
         gtk_window_set_skip_taskbar_hint(gtk_window, TRUE);
         gtk_window_set_skip_pager_hint(gtk_window, TRUE);
         gtk_window_set_resizable(gtk_window, FALSE);
+
+#if GTK_CHECK_VERSION(3, 10, 0) && defined(GDK_WINDOWING_WAYLAND)
+        GdkDisplay* display = gtk_widget_get_display(widget);
+        if (GDK_IS_WAYLAND_DISPLAY(display)) {
+            GtkWidget* titlebar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_widget_set_size_request(titlebar, 0, 0);
+            gtk_window_set_titlebar(gtk_window, titlebar);
+        }
+#endif // GTK_CHECK_VERSION(3, 10, 0) && defined(GDK_WINDOWING_WAYLAND)
+
         gtk_window_set_decorated(gtk_window, FALSE);
     }
 #endif // __WXGTK__

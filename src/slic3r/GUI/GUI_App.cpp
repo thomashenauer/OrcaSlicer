@@ -276,10 +276,10 @@ bool is_associate_files(std::wstring extend)
 }
 #endif
 
-class SplashScreen : public wxSplashScreen
+class StockSplashScreen : public wxSplashScreen
 {
 public:
-    SplashScreen(wxPoint pos = wxDefaultPosition)
+    StockSplashScreen(wxPoint pos = wxDefaultPosition)
         : wxSplashScreen(wxBitmap(FromDIP(wxSize(480,480),nullptr)), wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT, 1500, nullptr, wxID_ANY, wxDefaultPosition, wxDefaultSize,
 #ifdef __APPLE__
             wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP
@@ -304,7 +304,7 @@ public:
         BitmapCache bmp_cache;
         m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
 
-        m_window->Bind(wxEVT_PAINT, &SplashScreen::OnPaint, this);
+        m_window->Bind(wxEVT_PAINT, &StockSplashScreen::OnPaint, this);
         m_window->Refresh();
         m_window->Update();
     }
@@ -400,6 +400,178 @@ private:
     wxFont m_font_version = Label::Body_16;
     wxFont m_font_action  = Label::Body_16;
 };
+
+#ifdef __WXGTK__
+class WaylandSplashScreen : public wxSplashScreen
+{
+public:
+    WaylandSplashScreen(wxPoint pos = wxDefaultPosition)
+    {
+        const wxBitmap bitmap(FromDIP(wxSize(480,480),nullptr));
+        const long splash_style = wxSPLASH_CENTRE_ON_SCREEN | wxSPLASH_TIMEOUT;
+        const int milliseconds = 1500;
+
+        wxFrame::Create(nullptr, wxID_ANY, wxEmptyString, wxPoint(0, 0), wxSize(100, 100),
+#ifdef __APPLE__
+            wxBORDER_NONE | wxFRAME_NO_TASKBAR | wxSTAY_ON_TOP |
+#else
+            wxBORDER_NONE | wxFRAME_NO_TASKBAR |
+#endif // !__APPLE__
+            wxFRAME_TOOL_WINDOW);
+
+        SetExtraStyle(GetExtraStyle() | wxWS_EX_TRANSIENT);
+        apply_gtk_splash_hints();
+
+        m_splashStyle = splash_style;
+        m_milliseconds = milliseconds;
+        m_window = new wxSplashScreenWindow(bitmap, this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxNO_BORDER);
+        SetClientSize(bitmap.GetLogicalSize());
+
+        if (m_splashStyle & wxSPLASH_CENTRE_ON_PARENT)
+            CentreOnParent();
+        else if (m_splashStyle & wxSPLASH_CENTRE_ON_SCREEN)
+            CentreOnScreen();
+
+        scale_font(m_font_version, 1.65f); // only scale this one since it hasnt a preloaded font like Label::Body_24;
+
+        m_bg_color = StateColor::darkModeColorFor(wxColour("#FFFFFF"));
+        m_fg_color = StateColor::darkModeColorFor(wxColour("#6B6A6A"));
+        bool dark_mode = m_fg_color != wxColour("#6B6A6A");
+        wxSize sz  = m_window->GetClientSize();
+        BitmapCache bmp_cache;
+        m_logo_bmp = *bmp_cache.load_svg(dark_mode ? "splash_logo_dark" : "splash_logo", sz.GetWidth(), sz.GetHeight());
+
+        m_window->Bind(wxEVT_PAINT, &WaylandSplashScreen::OnPaint, this);
+        m_window->Refresh();
+        m_window->Update();
+
+        if (pos != wxDefaultPosition) {
+            this->SetPosition(pos);
+            this->CenterOnScreen();
+        }
+
+        if (m_splashStyle & wxSPLASH_TIMEOUT) {
+            m_timer.SetOwner(this);
+            Bind(wxEVT_TIMER, [this](wxTimerEvent&) { Close(true); });
+            m_timer.Start(milliseconds, true);
+        }
+
+        Show(true);
+        m_window->SetFocus();
+#if defined( __WXMSW__ ) || defined(__WXMAC__)
+        Update();
+#endif
+    }
+
+    void OnPaint(wxPaintEvent& evt)
+    {
+        wxPaintDC dc(m_window);
+        wxSize c_sz = m_window->GetClientSize();
+
+        dc.SetBackground(wxBrush(m_bg_color));
+        dc.Clear();
+        if (m_logo_bmp.IsOk())
+            dc.DrawBitmap(m_logo_bmp, 0, 0, true);
+
+        wxRect rc = wxRect(0, 0, c_sz.GetWidth(), 0);
+        dc.SetTextForeground(m_fg_color);
+
+        dc.SetFont(m_font_version);
+        rc.y      = c_sz.GetHeight() * 0.72;
+        rc.height = dc.GetTextExtent(m_text_version).GetHeight();
+        dc.DrawLabel(m_text_version, rc, wxALIGN_CENTER);
+
+        dc.SetFont(m_font_action);
+        rc.y      = c_sz.GetHeight() * 0.88;
+        rc.height = dc.GetTextExtent(m_text_action).GetHeight();
+        dc.DrawLabel(m_text_action, rc, wxALIGN_CENTER);
+    }
+
+    void SetText(const wxString& text)
+    {
+        if (!text.empty()) {
+            m_text_action = text;
+            m_window->Refresh();
+            m_window->Update();
+#ifdef __WXOSX__
+            // without this code splash screen wouldn't be updated under OSX
+            wxYield();
+#endif
+        }
+    }
+
+    void scale_font(wxFont& font, float scale)
+    {
+#ifdef __WXMSW__
+        // Workaround for the font scaling in respect to the current active display,
+        // not for the primary display, as it's implemented in Font.cpp
+        // See https://github.com/wxWidgets/wxWidgets/blob/master/src/msw/font.cpp
+        // void wxNativeFontInfo::SetFractionalPointSize(float pointSizeNew)
+        wxNativeFontInfo nfi= *font.GetNativeFontInfo();
+        float pointSizeNew  = scale * font.GetPointSize();
+        nfi.lf.lfHeight     = nfi.GetLogFontHeightAtPPI(pointSizeNew, get_dpi_for_window(this));
+        nfi.pointSize       = pointSizeNew;
+        font = wxFont(nfi);
+#else
+        font.Scale(scale);
+#endif //__WXMSW__
+    }
+
+private:
+    void apply_gtk_splash_hints()
+    {
+        GtkWidget* widget = GetHandle();
+        if (!widget || !GTK_IS_WINDOW(widget))
+            return;
+
+        GtkWindow* gtk_window = GTK_WINDOW(widget);
+        gtk_window_set_type_hint(gtk_window, GDK_WINDOW_TYPE_HINT_SPLASHSCREEN);
+        gtk_window_set_skip_taskbar_hint(gtk_window, TRUE);
+        gtk_window_set_skip_pager_hint(gtk_window, TRUE);
+        gtk_window_set_resizable(gtk_window, FALSE);
+
+#if GTK_CHECK_VERSION(3, 10, 0) && defined(GDK_WINDOWING_WAYLAND)
+        GdkDisplay* display = gtk_widget_get_display(widget);
+        if (GDK_IS_WAYLAND_DISPLAY(display)) {
+            GtkWidget* titlebar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+            gtk_widget_set_size_request(titlebar, 0, 0);
+            gtk_window_set_titlebar(gtk_window, titlebar);
+        }
+#endif // GTK_CHECK_VERSION(3, 10, 0) && defined(GDK_WINDOWING_WAYLAND)
+
+        gtk_window_set_decorated(gtk_window, FALSE);
+    }
+
+    wxBitmap m_logo_bmp;
+    wxColour m_fg_color;
+    wxColour m_bg_color;
+
+    wxString m_text_version = GUI_App::format_display_version();
+    wxString m_text_action  = _L("Loading configuration") + dots;
+
+    wxFont m_font_version = Label::Body_16;
+    wxFont m_font_action  = Label::Body_16;
+};
+
+static bool is_gtk_wayland_display()
+{
+#if defined(GDK_WINDOWING_WAYLAND)
+    GdkDisplay* display = gdk_display_get_default();
+    return display && GDK_IS_WAYLAND_DISPLAY(display);
+#else
+    return false;
+#endif
+}
+#endif // __WXGTK__
+
+static wxSplashScreen* create_splash_screen(wxPoint pos)
+{
+#ifdef __WXGTK__
+    if (is_gtk_wayland_display())
+        return new WaylandSplashScreen(pos);
+#endif // __WXGTK__
+    return new StockSplashScreen(pos);
+}
 
 #ifdef __linux__
 static void migrate_flatpak_legacy_datadir(const boost::filesystem::path &data_dir_path)
@@ -2780,7 +2952,7 @@ bool GUI_App::on_init_inner()
         app_config->set("version", SLIC3R_VERSION);
     }
 
-    SplashScreen * scrn = nullptr;
+    wxSplashScreen * scrn = nullptr;
     if (app_config->get("show_splash_screen") == "true") {
         // Detect position (display) to show the splash screen
         // Now this position is equal to the mainframe position
@@ -2793,7 +2965,7 @@ bool GUI_App::on_init_inner()
 
         BOOST_LOG_TRIVIAL(info) << "begin to show the splash screen...";
         //BBS use BBL splashScreen
-        scrn = new SplashScreen(splashscreen_pos);
+        scrn = create_splash_screen(splashscreen_pos);
         wxYield();
         //scrn->SetText(_L("Loading configuration")+ dots);
     }

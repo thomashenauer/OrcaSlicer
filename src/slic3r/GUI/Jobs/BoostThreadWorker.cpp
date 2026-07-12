@@ -57,6 +57,8 @@ void BoostThreadWorker::run()
                     m_output_queue.push(std::move(e)); // finalization message
                 }
                 m_running.store(false);
+                // Wake a consumer that removed Finalize before observing the cleared running state.
+                m_output_queue.push();
             });
     };
 }
